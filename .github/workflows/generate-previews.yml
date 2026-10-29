@@ -1,0 +1,89 @@
+name: Generate cover previews
+
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - 'AA_CoverFigure_*.jpg'
+      - '.github/workflows/generate-previews.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: generate-cover-previews
+  cancel-in-progress: false
+
+jobs:
+  generate:
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Download repository
+        uses: actions/checkout@v6
+        with:
+          ref: main
+          fetch-depth: 0
+
+      - name: Set up Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: '3.12'
+
+      - name: Install image processing tool
+        run: python -m pip install Pillow
+
+      - name: Generate WebP previews
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+          from PIL import Image, ImageOps
+
+          MAX_SIZE = (960, 960)
+          QUALITY = 80
+
+          output_dir = Path("preview")
+          output_dir.mkdir(exist_ok=True)
+
+          sources = sorted(Path(".").glob("AA_CoverFigure_*.jpg"))
+          if not sources:
+              raise SystemExit("No AA_CoverFigure_*.jpg files found.")
+
+          for source in sources:
+              target = output_dir / f"{source.stem}.webp"
+
+              with Image.open(source) as original:
+                  image = ImageOps.exif_transpose(original).convert("RGB")
+                  image.thumbnail(MAX_SIZE, Image.Resampling.LANCZOS)
+                  image.save(
+                      target,
+                      format="WEBP",
+                      quality=QUALITY,
+                      method=6,
+                  )
+
+              print(
+                  f"{source.name} -> {target}: "
+                  f"{source.stat().st_size / 1024:.0f} KB -> "
+                  f"{target.stat().st_size / 1024:.0f} KB"
+              )
+          PY
+
+      - name: Save previews to repository
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+
+          git add preview/
+
+          if git diff --cached --quiet; then
+            echo "Previews are already up to date."
+            exit 0
+          fi
+
+          git commit -m "Update cover previews"
+          git pull --rebase origin main
+          git push origin HEAD:main
